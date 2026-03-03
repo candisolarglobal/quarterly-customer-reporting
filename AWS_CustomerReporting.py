@@ -7,8 +7,8 @@ ses = boto3.client('ses')
 
 def lambda_handler(event, context):
     # --- 1. CONFIGURATION ---
-    BUCKET_NAME = "your-s3-bucket-name" # Enter your actual bucket name here
-    EXCEL_FILE_KEY = 'Customer IDS.xlsx' 
+    BUCKET_NAME = "in-customer-reports" 
+    EXCEL_FILE_KEY = 'Customer_IDS.xlsx' 
     SENDER_EMAIL = "accountsreceivables-IN@candi.solar"
 
     # --- 2. LOAD THE EXCEL FILE ---
@@ -71,4 +71,5 @@ def send_report_email(to_address, from_address, filename):
             'Subject': {'Data': subject},
             'Body': {'Text': {'Data': body}}
         }
+
     )
