@@ -48,7 +48,7 @@ def get_gdrive_folder_id_by_path(service, path, parent_id):
             fields="files(id, name)",
             supportsAllDrives=True,
             includeItemsFromAllDrives=True,
-            corpora='allDrives'
+            corporas='allDrives'
         ).execute()
 
         items = results.get('files', [])
@@ -72,7 +72,7 @@ def list_gdrive_files_in_folder(service, folder_id):
         fields="files(id, name)",
         supportsAllDrives=True,
         includeItemsFromAllDrives=True,
-        corpora='allDrives'
+        corporas='allDrives'
     ).execute()
     return results.get('files', [])
 
@@ -136,8 +136,8 @@ def lambda_handler(event, context):
     GDRIVE_SERVICE_ACCOUNT_KEY = get_ssm_param("/general/AMGDriveAccountKey")
     gdrive_service = get_gdrive_service(GDRIVE_SERVICE_ACCOUNT_KEY)
 
-    # Root folder that contains all quarter report subfolders
-    FOLDER_ID_CUST_REPORTS = "1h4N3hiPy9gKEv2fYYveaKbMrhzSv8oXo" #------> Need to update this
+    # Root folder that contains all quarter report subfolders AND the Excel file
+    FOLDER_ID_CUST_REPORTS = "1h4N3hiPy9gKEv2fYYveaKbMrhzSv8oXo"
 
     # --- 2. AUTO-DETECT QUARTER AND YEAR ---
     quarter, year = get_current_quarter_and_year()
@@ -153,28 +153,35 @@ def lambda_handler(event, context):
         print(f"Could not find quarter folder '{quarter_report_folder_name}': {e}")
         return
 
-    # --- 4. LIST ALL FILES IN THE QUARTER FOLDER ---
-    all_files = list_gdrive_files_in_folder(gdrive_service, folder_id_quarter)
-    print(f"Found {len(all_files)} file(s) in folder: {[f['name'] for f in all_files]}")
+    # --- 4. LIST FILES IN BOTH MAIN AND QUARTER FOLDERS ---
+    # Fetch files from the Main Folder to find the Excel sheet
+    main_folder_files = list_gdrive_files_in_folder(gdrive_service, FOLDER_ID_CUST_REPORTS)
+    
+    # Fetch files from the Quarter Folder to find the PDFs
+    quarter_files = list_gdrive_files_in_folder(gdrive_service, folder_id_quarter)
 
     # --- 5. SEPARATE EXCEL FILE FROM PDFs ---
     excel_file_meta = None
     pdf_files = []
 
-    for f in all_files:
+    # Look for Excel in the MAIN folder
+    for f in main_folder_files:
         name_lower = f['name'].lower()
-        # Match "Customer IDS" or "Customer IDS.xlsx"
         if name_lower == EXCEL_FILENAME.lower() or name_lower == EXCEL_FILENAME.lower() + '.xlsx':
             excel_file_meta = f
-        elif name_lower.endswith('.pdf'):
+            break
+
+    # Look for PDFs in the QUARTER folder
+    for f in quarter_files:
+        if f['name'].lower().endswith('.pdf'):
             pdf_files.append(f)
 
     if not excel_file_meta:
-        print(f"ERROR: Could not find '{EXCEL_FILENAME}' in the quarter folder.")
+        print(f"ERROR: Could not find '{EXCEL_FILENAME}' in the MAIN folder ({FOLDER_ID_CUST_REPORTS}).")
         return
 
     if not pdf_files:
-        print("No PDF files found in the quarter folder.")
+        print(f"No PDF files found in the quarter folder '{quarter_report_folder_name}'.")
         return
 
     # --- 6. DOWNLOAD AND PARSE THE EXCEL FILE ---
@@ -195,12 +202,9 @@ def lambda_handler(event, context):
         return
 
     # --- 7. MATCH EACH PDF TO A CUSTOMER AND SEND EMAIL ---
-    # PDF filename format: "Customer Name_something.pdf"
-    # Extract everything before the FIRST underscore as the customer name,
-    # then do a case-insensitive exact match against Excel customer names.
     for pdf_file in pdf_files:
         pdf_name = pdf_file['name']
-        pdf_stem = pdf_name.rsplit('.', 1)[0]                    # strip .pdf extension
+        pdf_stem = pdf_name.rsplit('.', 1)[0]                # strip .pdf extension
         customer_name_from_pdf = pdf_stem.split('_')[0].strip()  # part before first '_'
 
         print(f"PDF: '{pdf_name}' → extracted customer name: '{customer_name_from_pdf}'")
