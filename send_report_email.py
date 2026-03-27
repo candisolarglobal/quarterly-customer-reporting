@@ -1,3 +1,0 @@
-def send_report_email(customer_name):
-    email_body = f"Dear {customer_name} team,\n\n[Email content here]...\n\nCommercial Asset Management Team"
-    # Logic to send the email using the email_body\n    # ...
