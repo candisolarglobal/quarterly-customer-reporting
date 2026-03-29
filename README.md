@@ -1,5 +1,5 @@
 # India Customer Report Dispatcher
-Python Codes and walk - through of sending the quarterly customer reports
+Python code for automating the process of sending quarterly reports to clients.
 
  ---
 **Background**
