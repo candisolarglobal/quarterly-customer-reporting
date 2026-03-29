@@ -1,5 +1,5 @@
 # India Customer Report Dispatcher
-Python Codes and walk - through of sending the quarterly customer reports
+Python code for automating the process of sending quarterly reports to the customers
 
  ---
 **Background**
@@ -17,4 +17,10 @@ Every quarter, they are to be sent to the customer via mail. This repo aims to p
 5.  ***IAM*** - Identity and Access Management - Used for authentication purposes.
 
 ---
-Python code for an aws lambda function to dispatch india customer reports on a quarterly basis via email
+**General Process:**
+
+1. Automatic download of customer reports from Google LookerStudio by using Python script.
+2. The reports are downloaded into the folder with the naming standard: {QuarterReportYear} for example: Q1Report2026.
+3. The Commercial team will update the email Database with verified (Y/N).
+4. Post verification of the reports by the Commercial team, the reports are sent to the customers on a pre-set date and time.
+5. The dispatch summary is visible to the Commercial team through an email sent to the Commercial team's inbox.
