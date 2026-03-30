@@ -101,7 +101,7 @@ def send_report_email(to_address, from_address, filename, file_bytes, customer_n
         <p>Dear <b>{customer_name}</b> team,</p>
         
         <p>We are pleased to share the latest quarterly update regarding the <b>solar performance</b> 
-        and environmental impact of the {customer_name} project.</p>
+        and <b>environmental impact</b> of the <b>{customer_name} project.</b></p>
         
         <p>The attached report comprehensively breaks down your system's performance for this quarter. 
         It highlights the significant strides we have made together in generating clean electricity, 
@@ -120,7 +120,7 @@ def send_report_email(to_address, from_address, filename, file_bytes, customer_n
         
         <p>Best regards,<br>
         <b>Commercial Asset Management Team</b><br>
-        candi solar | cam@candi.solar</p>
+       
         
         <br>
         <img src="https://images.squarespace-cdn.com/content/v1/609e468f7c3af8779451f4da/1622470879366-1L7GB9068KZ4XDMTVFFO/candi_B.png" alt="candi solar logo" width="200">
