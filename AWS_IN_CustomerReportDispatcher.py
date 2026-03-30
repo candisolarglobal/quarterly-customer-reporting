@@ -186,7 +186,7 @@ def lambda_handler(event, context):
     quarter_report_folder_name = f"{quarter}Report{year}"
     print(f"--- Starting Dispatch for: {quarter_report_folder_name} ---")
 
-    # --- 3. RESOLVE QUARTER FOLDER ID (Where PDFs are located) ---
+    # --- 3. RESOLVE QUARTER FOLDER ID ---
     try:
         folder_id_quarter = get_gdrive_folder_id_by_path(
             gdrive_service, quarter_report_folder_name, FOLDER_ID_CUST_REPORTS
@@ -195,14 +195,11 @@ def lambda_handler(event, context):
         print(f"CRITICAL ERROR: Folder '{quarter_report_folder_name}' not found: {e}")
         return
 
-    # --- 4. LIST FILES FROM BOTH LOCATIONS ---
-    # Fetch files from the MAIN folder to find the Excel mapping
+    # --- 4. LIST FILES ---
     main_folder_files = list_gdrive_files_in_folder(gdrive_service, FOLDER_ID_CUST_REPORTS)
-    
-    # Fetch files from the QUARTER folder to find the PDFs
     quarter_folder_files = list_gdrive_files_in_folder(gdrive_service, folder_id_quarter)
     
-    # --- 5. IDENTIFY EXCEL FILE IN MAIN FOLDER ---
+    # --- 5. IDENTIFY EXCEL FILE ---
     excel_file_meta = None
     for f in main_folder_files:
         name_lower = f['name'].lower()
@@ -211,32 +208,42 @@ def lambda_handler(event, context):
             break
 
     if not excel_file_meta:
-        print(f"ERROR: Could not find '{EXCEL_FILENAME}' in the MAIN folder ({FOLDER_ID_CUST_REPORTS}).")
+        print(f"ERROR: Could not find '{EXCEL_FILENAME}' in the MAIN folder.")
         return
 
-    # --- 6. IDENTIFY PDF FILES IN QUARTER FOLDER ---
+    # --- 6. IDENTIFY PDF FILES ---
     pdf_files = [f for f in quarter_folder_files if f['name'].lower().endswith('.pdf')]
-    print(f"Found {len(pdf_files)} PDF reports in {quarter_report_folder_name}.")
+    print(f"Found {len(pdf_files)} PDF reports.")
 
-    # --- 7. DOWNLOAD AND PARSE THE EXCEL FILE ---
+    # --- 7. DOWNLOAD AND PARSE THE EXCEL FILE (UPDATED) ---
     try:
         excel_bytes = download_file_content(gdrive_service, excel_file_meta['id'])
         wb = openpyxl.load_workbook(io.BytesIO(excel_bytes))
         sheet = wb["Data"]
 
         email_map = {}
+        # We now look at Row[0] (Name), Row[1] (Email), and Row[2] (Verified)
         for row in sheet.iter_rows(min_row=2, values_only=True):
             if row[0] and row[1]:
-                email_map[str(row[0]).strip()] = str(row[1]).strip()
-        print(f"Successfully loaded {len(email_map)} mapping entries from Excel.")
+                customer_key = str(row[0]).strip()
+                email_val = str(row[1]).strip()
+                # Check if column C (index 2) is truthy/Yes
+                is_verified = str(row[2]).strip().lower() in ['y', 'yes'] if row[2] else False
+                
+                email_map[customer_key] = {
+                    "email": email_val,
+                    "verified": is_verified
+                }
+        print(f"Successfully loaded {len(email_map)} mapping entries.")
     except Exception as e:
         print(f"ERROR: Failed to process Excel: {e}")
         return
 
-    # --- 8. MATCH EACH PDF AND TRACK RESULTS ---
+    # --- 8. MATCH EACH PDF AND TRACK RESULTS (UPDATED) ---
     successful_sends = []
     failed_sends = []
     no_match_found = []
+    unverified_skipped = [] # Track skipped customers
 
     for pdf_file in pdf_files:
         pdf_name = pdf_file['name']
@@ -249,7 +256,16 @@ def lambda_handler(event, context):
         )
 
         if matched_key:
-            recipient_email = email_map[matched_key]
+            customer_data = email_map[matched_key]
+            recipient_email = customer_data["email"]
+            
+            # --- NEW CHECK: IS VERIFIED? ---
+            if not customer_data["verified"]:
+                log_entry = f"SKIPPED (Unverified): '{pdf_name}' for {matched_key}"
+                unverified_skipped.append(f"- {log_entry}")
+                print(log_entry)
+                continue
+
             try:
                 pdf_bytes = download_file_content(gdrive_service, pdf_file['id'])
                 send_report_email(recipient_email, SENDER_EMAIL, pdf_name, pdf_bytes, matched_key)
@@ -266,25 +282,24 @@ def lambda_handler(event, context):
             no_match_found.append(f"- {log_entry}")
             print(log_entry)
 
-    # --- 9. FINAL SUMMARY & LOG DUMP ---
+    # --- 9. FINAL SUMMARY ---
+    # Optional: You can update send_summary_report to include unverified_skipped if you wish
     print("\n" + "="*50)
-    print("JOB COMPLETED - SENDING SUMMARY EMAIL")
+    print("JOB COMPLETED")
     print("="*50)
 
     try:
+        # Merging skipped into no_matches or creating a new category for the summary
         send_summary_report(
             to_address=SENDER_EMAIL,
             from_address=SENDER_EMAIL,
             successes=successful_sends,
             fails=failed_sends,
-            no_matches=no_match_found,
+            no_matches=no_match_found + unverified_skipped, 
             folder_name=quarter_report_folder_name
         )
-        print("Summary email successfully sent to Admin.")
     except Exception as e:
         print(f"ERROR: Could not send summary email: {e}")
 
-    return {
-        'statusCode': 200,
-        'body': json.dumps('Process Finished')
-    }
+    return {'statusCode': 200, 'body': json.dumps('Process Finished')
+}
