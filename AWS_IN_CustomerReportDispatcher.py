@@ -94,25 +94,43 @@ def send_report_email(to_address, from_address, filename, file_bytes, customer_n
     msg['From'] = from_address
     msg['To'] = to_address
 
-    body = (
-        f"Dear {customer_name} team,\n\n"
-        f"We are pleased to share the latest quarterly update regarding the solar performance "
-        f"and environmental impact of the {customer_name} project.\n\n"
-        f"The attached report comprehensively breaks down your system's performance for this quarter. "
-        f"It highlights the significant strides we have made together in generating clean electricity, "
-        f"reducing carbon emissions, and achieving measurable utility savings.\n\n"
-        f"What’s included in your report:\n\n"
-        f"- Detailed solar generation and efficiency metrics.\n"
-        f"- Environmental impact summaries (Carbon offset and tree-planting equivalents).\n"
-        f"- A summary of ongoing operations and maintenance (O&M) activities ensuring your system remains at peak performance.\n\n"
-        f"Please find the full document, {filename}, attached for your review.\n\n"
-        f"Thank you for your continued partnership and shared dedication to a sustainable future.\n\n"
-        f"Best regards,\n"
-        f"Commercial Asset Management Team\n"
-        f"candi solar | cam@candi.solar"
-    )
+    # This section was previously un-indented, causing the error
+    body = f"""
+    <html>
+    <body>
+        <p>Dear <b>{customer_name}</b> team,</p>
+        
+        <p>We are pleased to share the latest quarterly update regarding the <b>solar performance</b> 
+        and environmental impact of the {customer_name} project.</p>
+        
+        <p>The attached report comprehensively breaks down your system's performance for this quarter. 
+        It highlights the significant strides we have made together in generating clean electricity, 
+        reducing carbon emissions, and achieving measurable utility savings.</p>
+        
+        <p><b>What’s included in your report:</b></p>
+        <ul>
+            <li>Detailed solar generation and efficiency metrics.</li>
+            <li>Environmental impact summaries (Carbon offset and tree-planting equivalents).</li>
+            <li>A summary of ongoing operations and maintenance (O&M) activities.</li>
+        </ul>
+        
+        <p>Please find the full document, <i>{filename}</i>, attached for your review.</p>
+        
+        <p>Thank you for your continued partnership and shared dedication to a sustainable future.</p>
+        
+        <p>Best regards,<br>
+        <b>Commercial Asset Management Team</b><br>
+        candi solar | cam@candi.solar</p>
+        
+        <br>
+        <img src="https://images.squarespace-cdn.com/content/v1/609e468f7c3af8779451f4da/1622470879366-1L7GB9068KZ4XDMTVFFO/candi_B.png" alt="candi solar logo" width="200">
+    </body>
+    </html>
+    """
     
-    msg.attach(mt.MIMEText(body, 'plain'))
+    # CRITICAL: Changed 'plain' to 'html' so your formatting works
+    msg.attach(mt.MIMEText(body, 'html'))
+    
     attachment = ma.MIMEApplication(file_bytes, _subtype='pdf')
     attachment.add_header('Content-Disposition', 'attachment', filename=filename)
     msg.attach(attachment)
@@ -165,7 +183,7 @@ def lambda_handler(event, context):
 
     # --- 2. AUTO-DETECT QUARTER AND YEAR ---
     quarter, year = get_current_quarter_and_year()
-    quarter_report_folder_name = f"{quarter}_Report_{year}"
+    quarter_report_folder_name = f"{quarter}Report{year}"
     print(f"--- Starting Dispatch for: {quarter_report_folder_name} ---")
 
     # --- 3. RESOLVE QUARTER FOLDER ID (Where PDFs are located) ---
