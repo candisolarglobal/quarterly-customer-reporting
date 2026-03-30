@@ -200,12 +200,7 @@ def lambda_handler(event, context):
     quarter_folder_files = list_gdrive_files_in_folder(gdrive_service, folder_id_quarter)
     
     # --- 5. IDENTIFY EXCEL FILE ---
-    excel_file_meta = None
-    for f in main_folder_files:
-        name_lower = f['name'].lower()
-        if name_lower == EXCEL_FILENAME.lower() or name_lower == EXCEL_FILENAME.lower() + '.xlsx':
-            excel_file_meta = f
-            break
+    excel_file_meta = next((f for f in main_folder_files if f['name'].lower() in [EXCEL_FILENAME.lower(), f"{EXCEL_FILENAME.lower()}.xlsx"]), None)
 
     if not excel_file_meta:
         print(f"ERROR: Could not find '{EXCEL_FILENAME}' in the MAIN folder.")
@@ -215,91 +210,104 @@ def lambda_handler(event, context):
     pdf_files = [f for f in quarter_folder_files if f['name'].lower().endswith('.pdf')]
     print(f"Found {len(pdf_files)} PDF reports.")
 
-    # --- 7. DOWNLOAD AND PARSE THE EXCEL FILE (UPDATED) ---
+    # --- 7. DOWNLOAD AND PARSE THE EXCEL FILE ---
     try:
         excel_bytes = download_file_content(gdrive_service, excel_file_meta['id'])
-        wb = openpyxl.load_workbook(io.BytesIO(excel_bytes))
+        wb = openpyxl.load_workbook(io.BytesIO(excel_bytes), data_only=True)
         sheet = wb["Data"]
 
         email_map = {}
-        # We now look at Row[0] (Name), Row[1] (Email), and Row[2] (Verified)
         for row in sheet.iter_rows(min_row=2, values_only=True):
+            # Column A (0): Project/Name | Column B (1): Email | Column C (2): Verified
             if row[0] and row[1]:
-                customer_key = str(row[0]).strip()
-                email_val = str(row[1]).strip()
-                # Check if column C (index 2) is truthy/Yes
-                is_verified = str(row[2]).strip().lower() in ['y', 'yes'] if row[2] else False
+                proj_name = str(row[0]).strip()
+                email_addr = str(row[1]).strip()
                 
-                email_map[customer_key] = {
-                    "email": email_val,
+                # --- STRICT VERIFICATION CHECK ---
+                # Checks for 'y', 'Y', 'yes', 'Yes', 'YES' etc.
+                raw_verified = str(row[2]).strip().lower() if row[2] else ""
+                is_verified = raw_verified in ['y', 'yes']
+                
+                email_map[proj_name.lower()] = {
+                    "original_name": proj_name,
+                    "email": email_addr,
                     "verified": is_verified
                 }
-        print(f"Successfully loaded {len(email_map)} mapping entries.")
+        print(f"Loaded {len(email_map)} mapping entries from Excel.")
     except Exception as e:
         print(f"ERROR: Failed to process Excel: {e}")
         return
 
-    # --- 8. MATCH EACH PDF AND TRACK RESULTS (UPDATED) ---
+    # --- 8. MATCH EACH PDF AND TRACK RESULTS ---
     successful_sends = []
     failed_sends = []
     no_match_found = []
-    unverified_skipped = [] # Track skipped customers
+    skipped_unverified = []
 
     for pdf_file in pdf_files:
         pdf_name = pdf_file['name']
         pdf_stem = pdf_name.rsplit('.', 1)[0]
-        customer_name_from_pdf = pdf_stem.split('_')[0].strip()
+        # Split by underscore and take the first part as the customer name
+        customer_name_from_pdf = pdf_stem.split('_')[0].strip().lower()
 
-        matched_key = next(
-            (k for k in email_map if k.lower() == customer_name_from_pdf.lower()),
-            None
-        )
-
-        if matched_key:
-            customer_data = email_map[matched_key]
-            recipient_email = customer_data["email"]
+        if customer_name_from_pdf in email_map:
+            customer_data = email_map[customer_name_from_pdf]
             
-            # --- NEW CHECK: IS VERIFIED? ---
+            # --- THE GUARD: ONLY SEND IF VERIFIED ---
             if not customer_data["verified"]:
-                log_entry = f"SKIPPED (Unverified): '{pdf_name}' for {matched_key}"
-                unverified_skipped.append(f"- {log_entry}")
+                log_entry = f"SKIPPED (Unverified): '{pdf_name}' for customer '{customer_data['original_name']}'"
+                skipped_unverified.append(f"- {log_entry}")
                 print(log_entry)
                 continue
 
+            # Verified! Proceed to download and send
             try:
+                recipient_email = customer_data["email"]
                 pdf_bytes = download_file_content(gdrive_service, pdf_file['id'])
-                send_report_email(recipient_email, SENDER_EMAIL, pdf_name, pdf_bytes, matched_key)
+                
+                send_report_email(
+                    to_address=recipient_email, 
+                    from_address=SENDER_EMAIL, 
+                    filename=pdf_name, 
+                    file_bytes=pdf_bytes, 
+                    customer_name=customer_data["original_name"]
+                )
                 
                 log_entry = f"SUCCESS: '{pdf_name}' sent to {recipient_email}"
                 successful_sends.append(f"- {log_entry}")
                 print(log_entry)
             except Exception as e:
-                log_entry = f"FAILED: '{pdf_name}' to {recipient_email} | Error: {e}"
+                log_entry = f"FAILED: '{pdf_name}' | Error: {e}"
                 failed_sends.append(f"- {log_entry}")
                 print(log_entry)
         else:
-            log_entry = f"NO MATCH: No Excel entry for '{customer_name_from_pdf}' (File: {pdf_name})"
+            log_entry = f"NO MATCH: '{customer_name_from_pdf}' (from file {pdf_name}) not found in Excel."
             no_match_found.append(f"- {log_entry}")
             print(log_entry)
 
     # --- 9. FINAL SUMMARY ---
-    # Optional: You can update send_summary_report to include unverified_skipped if you wish
     print("\n" + "="*50)
     print("JOB COMPLETED")
     print("="*50)
 
     try:
-        # Merging skipped into no_matches or creating a new category for the summary
+        # We combine 'unverified' and 'no match' into the summary report's "no_matches" section
+        # or you can modify send_summary_report to have a 4th category.
+        total_issues = no_match_found + skipped_unverified
+        
         send_summary_report(
             to_address=SENDER_EMAIL,
             from_address=SENDER_EMAIL,
             successes=successful_sends,
             fails=failed_sends,
-            no_matches=no_match_found + unverified_skipped, 
+            no_matches=total_issues,
             folder_name=quarter_report_folder_name
         )
+        print("Summary email sent.")
     except Exception as e:
         print(f"ERROR: Could not send summary email: {e}")
 
-    return {'statusCode': 200, 'body': json.dumps('Process Finished')
-}
+    return {
+        'statusCode': 200,
+        'body': json.dumps('Process Finished')
+    }
