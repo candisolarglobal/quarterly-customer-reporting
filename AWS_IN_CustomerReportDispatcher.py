@@ -94,25 +94,43 @@ def send_report_email(to_address, from_address, filename, file_bytes, customer_n
     msg['From'] = from_address
     msg['To'] = to_address
 
-    body = (
-        f"Dear {customer_name} team,\n\n"
-        f"We are pleased to share the latest quarterly update regarding the solar performance "
-        f"and environmental impact of the {customer_name} project.\n\n"
-        f"The attached report comprehensively breaks down your system's performance for this quarter. "
-        f"It highlights the significant strides we have made together in generating clean electricity, "
-        f"reducing carbon emissions, and achieving measurable utility savings.\n\n"
-        f"What’s included in your report:\n\n"
-        f"- Detailed solar generation and efficiency metrics.\n"
-        f"- Environmental impact summaries (Carbon offset and tree-planting equivalents).\n"
-        f"- A summary of ongoing operations and maintenance (O&M) activities ensuring your system remains at peak performance.\n\n"
-        f"Please find the full document, {filename}, attached for your review.\n\n"
-        f"Thank you for your continued partnership and shared dedication to a sustainable future.\n\n"
-        f"Best regards,\n"
-        f"Commercial Asset Management Team\n"
-        f"candi solar | cam@candi.solar"
-    )
+    # This section was previously un-indented, causing the error
+    body = f"""
+    <html>
+    <body>
+        <p>Dear <b>{customer_name}</b> team,</p>
+        
+        <p>We are pleased to share the latest quarterly update regarding the <b>solar performance</b> 
+        and <b>environmental impact</b> of the <b>{customer_name} project.</b></p>
+        
+        <p>The attached report comprehensively breaks down your system's performance for this quarter. 
+        It highlights the significant strides we have made together in generating clean electricity, 
+        reducing carbon emissions, and achieving measurable utility savings.</p>
+        
+        <p><b>What’s included in your report:</b></p>
+        <ul>
+            <li>Detailed solar generation and efficiency metrics.</li>
+            <li>Environmental impact summaries (Carbon offset and tree-planting equivalents).</li>
+            <li>A summary of ongoing operations and maintenance (O&M) activities.</li>
+        </ul>
+        
+        <p>Please find the full document, <i>{filename}</i>, attached for your review.</p>
+        
+        <p>Thank you for your continued partnership and shared dedication to a sustainable future.</p>
+        
+        <p>Best regards,<br>
+        <b>Commercial Asset Management Team</b><br>
+       
+        
+        <br>
+        <img src="https://images.squarespace-cdn.com/content/v1/609e468f7c3af8779451f4da/1622470879366-1L7GB9068KZ4XDMTVFFO/candi_B.png" alt="candi solar logo" width="200">
+    </body>
+    </html>
+    """
     
-    msg.attach(mt.MIMEText(body, 'plain'))
+    # CRITICAL: Changed 'plain' to 'html' so your formatting works
+    msg.attach(mt.MIMEText(body, 'html'))
+    
     attachment = ma.MIMEApplication(file_bytes, _subtype='pdf')
     attachment.add_header('Content-Disposition', 'attachment', filename=filename)
     msg.attach(attachment)
@@ -165,10 +183,10 @@ def lambda_handler(event, context):
 
     # --- 2. AUTO-DETECT QUARTER AND YEAR ---
     quarter, year = get_current_quarter_and_year()
-    quarter_report_folder_name = f"{quarter}_Report_{year}"
+    quarter_report_folder_name = f"{quarter}Report{year}"
     print(f"--- Starting Dispatch for: {quarter_report_folder_name} ---")
 
-    # --- 3. RESOLVE QUARTER FOLDER ID (Where PDFs are located) ---
+    # --- 3. RESOLVE QUARTER FOLDER ID ---
     try:
         folder_id_quarter = get_gdrive_folder_id_by_path(
             gdrive_service, quarter_report_folder_name, FOLDER_ID_CUST_REPORTS
@@ -177,40 +195,45 @@ def lambda_handler(event, context):
         print(f"CRITICAL ERROR: Folder '{quarter_report_folder_name}' not found: {e}")
         return
 
-    # --- 4. LIST FILES FROM BOTH LOCATIONS ---
-    # Fetch files from the MAIN folder to find the Excel mapping
+    # --- 4. LIST FILES ---
     main_folder_files = list_gdrive_files_in_folder(gdrive_service, FOLDER_ID_CUST_REPORTS)
-    
-    # Fetch files from the QUARTER folder to find the PDFs
     quarter_folder_files = list_gdrive_files_in_folder(gdrive_service, folder_id_quarter)
     
-    # --- 5. IDENTIFY EXCEL FILE IN MAIN FOLDER ---
-    excel_file_meta = None
-    for f in main_folder_files:
-        name_lower = f['name'].lower()
-        if name_lower == EXCEL_FILENAME.lower() or name_lower == EXCEL_FILENAME.lower() + '.xlsx':
-            excel_file_meta = f
-            break
+    # --- 5. IDENTIFY EXCEL FILE ---
+    excel_file_meta = next((f for f in main_folder_files if f['name'].lower() in [EXCEL_FILENAME.lower(), f"{EXCEL_FILENAME.lower()}.xlsx"]), None)
 
     if not excel_file_meta:
-        print(f"ERROR: Could not find '{EXCEL_FILENAME}' in the MAIN folder ({FOLDER_ID_CUST_REPORTS}).")
+        print(f"ERROR: Could not find '{EXCEL_FILENAME}' in the MAIN folder.")
         return
 
-    # --- 6. IDENTIFY PDF FILES IN QUARTER FOLDER ---
+    # --- 6. IDENTIFY PDF FILES ---
     pdf_files = [f for f in quarter_folder_files if f['name'].lower().endswith('.pdf')]
-    print(f"Found {len(pdf_files)} PDF reports in {quarter_report_folder_name}.")
+    print(f"Found {len(pdf_files)} PDF reports.")
 
     # --- 7. DOWNLOAD AND PARSE THE EXCEL FILE ---
     try:
         excel_bytes = download_file_content(gdrive_service, excel_file_meta['id'])
-        wb = openpyxl.load_workbook(io.BytesIO(excel_bytes))
+        wb = openpyxl.load_workbook(io.BytesIO(excel_bytes), data_only=True)
         sheet = wb["Data"]
 
         email_map = {}
         for row in sheet.iter_rows(min_row=2, values_only=True):
+            # Column A (0): Project/Name | Column B (1): Email | Column C (2): Verified
             if row[0] and row[1]:
-                email_map[str(row[0]).strip()] = str(row[1]).strip()
-        print(f"Successfully loaded {len(email_map)} mapping entries from Excel.")
+                proj_name = str(row[0]).strip()
+                email_addr = str(row[1]).strip()
+                
+                # --- STRICT VERIFICATION CHECK ---
+                # Checks for 'y', 'Y', 'yes', 'Yes', 'YES' etc.
+                raw_verified = str(row[2]).strip().lower() if row[2] else ""
+                is_verified = raw_verified in ['y', 'yes']
+                
+                email_map[proj_name.lower()] = {
+                    "original_name": proj_name,
+                    "email": email_addr,
+                    "verified": is_verified
+                }
+        print(f"Loaded {len(email_map)} mapping entries from Excel.")
     except Exception as e:
         print(f"ERROR: Failed to process Excel: {e}")
         return
@@ -219,50 +242,68 @@ def lambda_handler(event, context):
     successful_sends = []
     failed_sends = []
     no_match_found = []
+    skipped_unverified = []
 
     for pdf_file in pdf_files:
         pdf_name = pdf_file['name']
         pdf_stem = pdf_name.rsplit('.', 1)[0]
-        customer_name_from_pdf = pdf_stem.split('_')[0].strip()
+        # Split by underscore and take the first part as the customer name
+        customer_name_from_pdf = pdf_stem.split('_')[0].strip().lower()
 
-        matched_key = next(
-            (k for k in email_map if k.lower() == customer_name_from_pdf.lower()),
-            None
-        )
+        if customer_name_from_pdf in email_map:
+            customer_data = email_map[customer_name_from_pdf]
+            
+            # --- THE GUARD: ONLY SEND IF VERIFIED ---
+            if not customer_data["verified"]:
+                log_entry = f"SKIPPED (Unverified): '{pdf_name}' for customer '{customer_data['original_name']}'"
+                skipped_unverified.append(f"- {log_entry}")
+                print(log_entry)
+                continue
 
-        if matched_key:
-            recipient_email = email_map[matched_key]
+            # Verified! Proceed to download and send
             try:
+                recipient_email = customer_data["email"]
                 pdf_bytes = download_file_content(gdrive_service, pdf_file['id'])
-                send_report_email(recipient_email, SENDER_EMAIL, pdf_name, pdf_bytes, matched_key)
+                
+                send_report_email(
+                    to_address=recipient_email, 
+                    from_address=SENDER_EMAIL, 
+                    filename=pdf_name, 
+                    file_bytes=pdf_bytes, 
+                    customer_name=customer_data["original_name"]
+                )
                 
                 log_entry = f"SUCCESS: '{pdf_name}' sent to {recipient_email}"
                 successful_sends.append(f"- {log_entry}")
                 print(log_entry)
             except Exception as e:
-                log_entry = f"FAILED: '{pdf_name}' to {recipient_email} | Error: {e}"
+                log_entry = f"FAILED: '{pdf_name}' | Error: {e}"
                 failed_sends.append(f"- {log_entry}")
                 print(log_entry)
         else:
-            log_entry = f"NO MATCH: No Excel entry for '{customer_name_from_pdf}' (File: {pdf_name})"
+            log_entry = f"NO MATCH: '{customer_name_from_pdf}' (from file {pdf_name}) not found in Excel."
             no_match_found.append(f"- {log_entry}")
             print(log_entry)
 
-    # --- 9. FINAL SUMMARY & LOG DUMP ---
+    # --- 9. FINAL SUMMARY ---
     print("\n" + "="*50)
-    print("JOB COMPLETED - SENDING SUMMARY EMAIL")
+    print("JOB COMPLETED")
     print("="*50)
 
     try:
+        # We combine 'unverified' and 'no match' into the summary report's "no_matches" section
+        # or you can modify send_summary_report to have a 4th category.
+        total_issues = no_match_found + skipped_unverified
+        
         send_summary_report(
             to_address=SENDER_EMAIL,
             from_address=SENDER_EMAIL,
             successes=successful_sends,
             fails=failed_sends,
-            no_matches=no_match_found,
+            no_matches=total_issues,
             folder_name=quarter_report_folder_name
         )
-        print("Summary email successfully sent to Admin.")
+        print("Summary email sent.")
     except Exception as e:
         print(f"ERROR: Could not send summary email: {e}")
 
